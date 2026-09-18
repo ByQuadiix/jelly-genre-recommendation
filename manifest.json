@@ -1,0 +1,12 @@
+[
+  {
+    "guid": "c5e4a8b2-6d1f-4b9e-9a72-8f1e5d3c9a01",
+    "name": "Anime Recommendations",
+    "description": "Fügt eine wöchentlich rotierende Empfehlungs-Reihe für Anime nach Genres auf der Startseite hinzu.",
+    "overview": "Wöchentliche Anime-Empfehlungen auf der Jellyfin-Startseite basierend auf konfigurierbaren Genres und Bibliotheken mit Genre-Tabs und nativer WebUI-Integration.",
+    "owner": "JellyfinCommunity",
+    "category": "General",
+    "imageUrl": "https://raw.githubusercontent.com/jellyfin/jellyfin-ux/master/branding/SVG/icon-transparent.svg",
+    "versions": []
+  }
+]

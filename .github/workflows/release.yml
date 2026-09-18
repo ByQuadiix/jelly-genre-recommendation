@@ -1,0 +1,158 @@
+name: Build, Release & Update Manifest
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (z. B. 1.0.0.0)'
+        required: true
+        default: '1.0.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Parse Version Information
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+            CHANGELOG="${{ github.event.release.body }}"
+          else
+            TAG="${{ github.event.inputs.version }}"
+            CHANGELOG="Manual build via workflow_dispatch"
+          fi
+
+          # Strip leading 'v' if present
+          CLEAN_VER="${TAG#v}"
+
+          # Ensure 4-part version number (e.g. 1.0.0 -> 1.0.0.0)
+          DOTS=$(echo "$CLEAN_VER" | tr -cd '.' | wc -c)
+          while [ "$DOTS" -lt 3 ]; do
+            CLEAN_VER="${CLEAN_VER}.0"
+            DOTS=$((DOTS + 1))
+          done
+
+          echo "VERSION=$CLEAN_VER" >> $GITHUB_ENV
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+          echo "$CHANGELOG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+          echo "Building version: $CLEAN_VER from tag: $TAG"
+
+      - name: Build & Publish Plugin
+        run: |
+          dotnet publish src/Jellyfin.Plugin.AnimeRecommendations/Jellyfin.Plugin.AnimeRecommendations.csproj \
+            -c Release \
+            -p:Version=${{ env.VERSION }} \
+            -p:AssemblyVersion=${{ env.VERSION }} \
+            -p:FileVersion=${{ env.VERSION }} \
+            -o ./publish
+
+      - name: Package Zip Archive
+        run: |
+          python3 -c "
+          import zipfile, os
+          with zipfile.ZipFile('Jellyfin.Plugin.AnimeRecommendations.zip', 'w', zipfile.ZIP_DEFLATED) as zipf:
+              for root, dirs, files in os.walk('publish'):
+                  for file in files:
+                      file_path = os.path.join(root, file)
+                      arcname = os.path.relpath(file_path, 'publish')
+                      zipf.write(file_path, arcname)
+          print('Plugin zip packaged successfully.')
+          "
+
+      - name: Calculate MD5 Checksum
+        id: checksum
+        run: |
+          MD5_HASH=$(md5sum Jellyfin.Plugin.AnimeRecommendations.zip | awk '{print $1}')
+          echo "MD5_HASH=$MD5_HASH" >> $GITHUB_ENV
+          echo "MD5 Checksum: $MD5_HASH"
+
+      - name: Update manifest.json
+        run: |
+          python3 - << 'EOF'
+          import json
+          import os
+          from datetime import datetime, timezone
+
+          version = os.environ["VERSION"]
+          tag = os.environ["TAG"]
+          md5 = os.environ["MD5_HASH"]
+          repo = os.environ.get("GITHUB_REPOSITORY", "")
+          changelog = os.environ.get("CHANGELOG", "Automated release build.")
+
+          manifest_path = "manifest.json"
+          if not os.path.exists(manifest_path):
+              raise FileNotFoundError("manifest.json not found!")
+
+          with open(manifest_path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          if not isinstance(data, list) or len(data) == 0:
+              raise ValueError("Invalid manifest.json structure!")
+
+          plugin_entry = data[0]
+          versions = plugin_entry.setdefault("versions", [])
+
+          download_url = f"https://github.com/{repo}/releases/download/{tag}/Jellyfin.Plugin.AnimeRecommendations.zip"
+          timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+          new_version_entry = {
+              "version": version,
+              "changelog": changelog.strip() if changelog else f"Release {version}",
+              "targetAbi": "12.0.0.0",
+              "sourceUrl": download_url,
+              "checksum": md5,
+              "timestamp": timestamp
+          }
+
+          # Remove existing version entry if already present (e.g. re-run)
+          versions = [v for v in versions if v.get("version") != version]
+          # Prepend new version at the beginning
+          versions.insert(0, new_version_entry)
+          plugin_entry["versions"] = versions
+
+          with open(manifest_path, "w", encoding="utf-8") as f:
+              json.dump(data, f, indent=2, ensure_ascii=False)
+              f.write("\n")
+
+          print(f"Successfully updated manifest.json for version {version}")
+          EOF
+
+      - name: Commit & Push updated manifest.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          if git diff --staged --quiet; then
+            echo "No changes in manifest.json to commit."
+          else
+            git commit -m "chore(release): update manifest.json for v${{ env.VERSION }} [skip ci]"
+            git push origin HEAD:main || git push origin HEAD:${{ github.ref_name }} || true
+          fi
+
+      - name: Upload Zip to GitHub Release Assets
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Jellyfin.Plugin.AnimeRecommendations.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

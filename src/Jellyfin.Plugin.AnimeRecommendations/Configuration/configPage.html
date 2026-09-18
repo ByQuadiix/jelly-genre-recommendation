@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <title>Anime Recommendations</title>
+</head>
+<body>
+    <div data-role="page" class="page type-interior pluginConfigurationPage animeRecommendationsConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+        <div data-role="content">
+            <div class="content-primary">
+                <form id="animeRecommendationsForm">
+                    <div class="sectionTitleContainer">
+                        <h2 class="sectionTitle">Anime Recommendations Einstellungen</h2>
+                    </div>
+
+                    <p class="fieldDescription">
+                        Konfiguriere hier die wöchentlich rotierenden Anime-Empfehlungen auf der Jellyfin-Startseite.
+                    </p>
+
+                    <!-- Library Selector -->
+                    <div class="selectContainer" style="margin-top: 1.5em;">
+                        <label class="selectLabel" for="selectLibrary">Anime-Bibliothek:</label>
+                        <select is="emby-select" id="selectLibrary" name="selectLibrary" class="emby-select-withcolor emby-select">
+                            <option value="">Lade Bibliotheken...</option>
+                        </select>
+                        <div class="fieldDescription">Wähle die Bibliothek aus, aus der die Anime-Empfehlungen bezogen werden sollen.</div>
+                    </div>
+
+                    <!-- Section Title -->
+                    <div class="inputContainer" style="margin-top: 1.5em;">
+                        <label class="inputLabel" for="inputSectionTitle">Titel der Startseiten-Reihe:</label>
+                        <input is="emby-input" type="text" id="inputSectionTitle" name="inputSectionTitle" value="Anime-Empfehlungen der Woche" />
+                        <div class="fieldDescription">Der Titel, der über der Empfehlungsreihe auf der Startseite angezeigt wird.</div>
+                    </div>
+
+                    <!-- Genres -->
+                    <div class="inputContainer" style="margin-top: 1.5em;">
+                        <label class="inputLabel" for="inputGenres">Empfohlene Genres (kommagetrennt):</label>
+                        <input is="emby-input" type="text" id="inputGenres" name="inputGenres" placeholder="Action, Abenteuer, Comedy, Romance, Fantasy, Sci-Fi" />
+                        <div class="fieldDescription">Für jedes dieser Genres werden wöchentlich zufällige Anime ausgewählt und als Reiter auf der Startseite angezeigt.</div>
+                    </div>
+
+                    <!-- Items Per Genre -->
+                    <div class="inputContainer" style="margin-top: 1.5em;">
+                        <label class="inputLabel" for="inputItemsPerGenre">Anzahl Empfehlungen pro Genre:</label>
+                        <input is="emby-input" type="number" id="inputItemsPerGenre" name="inputItemsPerGenre" min="1" max="50" value="12" />
+                        <div class="fieldDescription">Wie viele Anime pro Genre in die wöchentliche Auswahl aufgenommen werden (Standard: 12).</div>
+                    </div>
+
+                    <!-- Exclude Watched Checkbox -->
+                    <div class="checkboxContainer checkboxContainer-withDescription" style="margin-top: 1.5em;">
+                        <label class="emby-checkbox-label">
+                            <input is="emby-checkbox" type="checkbox" id="chkExcludeWatched" name="chkExcludeWatched" />
+                            <span>Bereits gesehene Anime ausschließen</span>
+                        </label>
+                        <div class="fieldDescription" style="margin-left: 28px;">
+                            Wenn aktiviert, werden Anime, die der angemeldete Benutzer bereits komplett gesehen hat, nicht in seinen Empfehlungen angezeigt.
+                        </div>
+                    </div>
+
+                    <!-- Status Info Box -->
+                    <div class="paperList" style="margin: 2em 0; padding: 1.2em; background: rgba(0,0,0,0.25); border-radius: 8px; border-left: 4px solid #00a4dc;">
+                        <h3 style="margin-top: 0;">Status & Diagnose</h3>
+                        <div id="statusDetails" style="font-size: 0.9em; line-height: 1.6;">
+                            <div><strong>File Transformation Plugin:</strong> <span id="lblFileTransformation">Prüfe...</span></div>
+                            <div><strong>Letzte Rotation:</strong> <span id="lblLastRotation">Keine</span></div>
+                            <div><strong>Aktive Empfehlungen im Cache:</strong> <span id="lblCachedCount">0</span></div>
+                        </div>
+                        <div style="margin-top: 1em;">
+                            <button is="emby-button" type="button" id="btnReroll" class="raised button-accent">
+                                🎲 Empfehlungen jetzt sofort neu auswürfeln
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <div style="margin-top: 2em;">
+                        <button is="emby-button" type="submit" class="raised button-submit block">
+                            <span>Speichern</span>
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <script type="text/javascript">
+            (function () {
+                const pluginId = "c5e4a8b2-6d1f-4b9e-9a72-8f1e5d3c9a01";
+
+                function loadStatus() {
+                    ApiClient.getJSON(ApiClient.getUrl('Recommendations/Status')).then(function (status) {
+                        const ftLabel = document.getElementById('lblFileTransformation');
+                        if (status.isFileTransformationActive) {
+                            ftLabel.innerHTML = '<span style="color: #4caf50;">Aktiv (Automatische HTML-Injektion aktiv)</span>';
+                        } else {
+                            ftLabel.innerHTML = '<span style="color: #ff9800;">Installiert / Standby</span> (Skript unter <code>/Recommendations/ClientScript.js</code> abrufbar)';
+                        }
+
+                        const rotationLabel = document.getElementById('lblLastRotation');
+                        if (status.lastRotationTime && status.lastRotationTime !== '0001-01-01T00:00:00') {
+                            rotationLabel.textContent = new Date(status.lastRotationTime).toLocaleString('de-DE');
+                        } else {
+                            rotationLabel.textContent = 'Noch nicht ausgeführt';
+                        }
+
+                        document.getElementById('lblCachedCount').textContent = status.totalCachedItems + ' Titel';
+                    }).catch(function (err) {
+                        console.error('Error loading status:', err);
+                    });
+                }
+
+                function loadLibraries(selectedId) {
+                    const select = document.getElementById('selectLibrary');
+                    ApiClient.getJSON(ApiClient.getUrl('Recommendations/Libraries')).then(function (libraries) {
+                        select.innerHTML = '<option value="">-- Automatisch erkennen (oder auswählen) --</option>';
+                        libraries.forEach(function (lib) {
+                            const opt = document.createElement('option');
+                            opt.value = lib.id;
+                            opt.textContent = lib.name;
+                            if (lib.id.toLowerCase() === (selectedId || '').toLowerCase()) {
+                                opt.selected = true;
+                            }
+                            select.appendChild(opt);
+                        });
+                    }).catch(function (err) {
+                        console.error('Error loading libraries:', err);
+                    });
+                }
+
+                function loadConfig() {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        document.getElementById('inputSectionTitle').value = config.SectionTitle || 'Anime-Empfehlungen der Woche';
+                        document.getElementById('inputGenres').value = (config.SelectedGenres || []).join(', ');
+                        document.getElementById('inputItemsPerGenre').value = config.ItemsPerGenre || 12;
+                        document.getElementById('chkExcludeWatched').checked = !!config.ExcludeWatched;
+
+                        loadLibraries(config.SelectedLibraryId);
+                        loadStatus();
+                        Dashboard.hideLoadingMsg();
+                    }).catch(function (err) {
+                        Dashboard.hideLoadingMsg();
+                        console.error('Error loading plugin config:', err);
+                    });
+                }
+
+                function saveConfig(e) {
+                    e.preventDefault();
+                    Dashboard.showLoadingMsg();
+
+                    const genresRaw = document.getElementById('inputGenres').value;
+                    const genres = genresRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+                    ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+                        config.SectionTitle = document.getElementById('inputSectionTitle').value || 'Anime-Empfehlungen der Woche';
+                        config.SelectedLibraryId = document.getElementById('selectLibrary').value || '00000000-0000-0000-0000-000000000000';
+                        config.SelectedGenres = genres.length > 0 ? genres : ['Action', 'Abenteuer', 'Comedy', 'Romance'];
+                        config.ItemsPerGenre = parseInt(document.getElementById('inputItemsPerGenre').value, 10) || 12;
+                        config.ExcludeWatched = document.getElementById('chkExcludeWatched').checked;
+
+                        ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
+                            Dashboard.hideLoadingMsg();
+                            Dashboard.alert('Einstellungen erfolgreich gespeichert!');
+                            loadStatus();
+                        }).catch(function (err) {
+                            Dashboard.hideLoadingMsg();
+                            Dashboard.alert('Fehler beim Speichern: ' + err);
+                        });
+                    });
+                }
+
+                function triggerReroll() {
+                    Dashboard.showLoadingMsg();
+                    ApiClient.fetch({
+                        url: ApiClient.getUrl('Recommendations/Reroll'),
+                        type: 'POST'
+                    }).then(function () {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert('Empfehlungen wurden erfolgreich neu ausgewürfelt!');
+                        loadStatus();
+                    }).catch(function (err) {
+                        Dashboard.hideLoadingMsg();
+                        Dashboard.alert('Fehler beim Neuauswürfeln: ' + err);
+                    });
+                }
+
+                document.querySelector('.animeRecommendationsConfigurationPage')
+                    .addEventListener('pageshow', function () {
+                        loadConfig();
+                        document.getElementById('animeRecommendationsForm').addEventListener('submit', saveConfig);
+                        document.getElementById('btnReroll').addEventListener('click', triggerReroll);
+                    });
+            })();
+        </script>
+    </div>
+</body>
+</html>
