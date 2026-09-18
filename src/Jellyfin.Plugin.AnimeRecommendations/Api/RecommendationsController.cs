@@ -65,16 +65,50 @@ public class RecommendationsController : ControllerBase
     {
         try
         {
-            var folders = _libraryManager.GetVirtualFolders()
-                .Select(f => new LibraryFolderDto
-                {
-                    Id = Guid.TryParse(f.ItemId, out var g) ? g : Guid.Empty,
-                    Name = f.Name
-                })
-                .Where(f => f.Id != Guid.Empty)
-                .ToList();
+            var list = new Dictionary<Guid, string>();
 
-            return Ok(folders);
+            // Source 1: Virtual folders
+            try
+            {
+                var virtualFolders = _libraryManager.GetVirtualFolders();
+                if (virtualFolders != null)
+                {
+                    foreach (var f in virtualFolders)
+                    {
+                        if (Guid.TryParse(f.ItemId, out var g) && !string.IsNullOrWhiteSpace(f.Name))
+                        {
+                            list[g] = f.Name;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not fetch virtual folders.");
+            }
+
+            // Source 2: UserRootFolder children
+            try
+            {
+                var root = _libraryManager.GetUserRootFolder();
+                if (root?.Children != null)
+                {
+                    foreach (var child in root.Children)
+                    {
+                        if (child != null && child.Id != Guid.Empty && !string.IsNullOrWhiteSpace(child.Name))
+                        {
+                            list[child.Id] = child.Name;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not fetch UserRootFolder children.");
+            }
+
+            var result = list.Select(kv => new LibraryFolderDto { Id = kv.Key, Name = kv.Value }).ToList();
+            return Ok(result);
         }
         catch (Exception ex)
         {

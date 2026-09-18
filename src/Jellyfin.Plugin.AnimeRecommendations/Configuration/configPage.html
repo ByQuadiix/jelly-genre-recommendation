@@ -89,45 +89,85 @@
                 function loadStatus() {
                     ApiClient.getJSON(ApiClient.getUrl('Recommendations/Status')).then(function (status) {
                         const ftLabel = document.getElementById('lblFileTransformation');
-                        if (status.isFileTransformationActive) {
+                        if (status && status.isFileTransformationActive) {
                             ftLabel.innerHTML = '<span style="color: #4caf50;">Aktiv (Automatische HTML-Injektion aktiv)</span>';
                         } else {
                             ftLabel.innerHTML = '<span style="color: #ff9800;">Installiert / Standby</span> (Skript unter <code>/Recommendations/ClientScript.js</code> abrufbar)';
                         }
 
                         const rotationLabel = document.getElementById('lblLastRotation');
-                        if (status.lastRotationTime && status.lastRotationTime !== '0001-01-01T00:00:00') {
+                        if (status && status.lastRotationTime && status.lastRotationTime !== '0001-01-01T00:00:00') {
                             rotationLabel.textContent = new Date(status.lastRotationTime).toLocaleString('de-DE');
                         } else {
                             rotationLabel.textContent = 'Noch nicht ausgeführt';
                         }
 
-                        document.getElementById('lblCachedCount').textContent = status.totalCachedItems + ' Titel';
+                        document.getElementById('lblCachedCount').textContent = ((status && status.totalCachedItems) || 0) + ' Titel';
                     }).catch(function (err) {
-                        console.error('Error loading status:', err);
+                        console.warn('[AnimeRecommendations] Could not load status:', err);
+                    });
+                }
+
+                function populateSelect(select, libraries, selectedId) {
+                    select.innerHTML = '<option value="">-- Alle Bibliotheken / Automatisch erkennen --</option>';
+                    if (!libraries || libraries.length === 0) {
+                        return;
+                    }
+
+                    libraries.forEach(function (lib) {
+                        const id = lib.Id || lib.id || lib.ItemId || lib.itemId;
+                        const name = lib.Name || lib.name;
+                        if (!id || !name) return;
+
+                        const opt = document.createElement('option');
+                        opt.value = id;
+                        opt.textContent = name;
+                        if (selectedId && id.toLowerCase() === selectedId.toLowerCase()) {
+                            opt.selected = true;
+                        }
+                        select.appendChild(opt);
                     });
                 }
 
                 function loadLibraries(selectedId) {
                     const select = document.getElementById('selectLibrary');
+                    if (!select) return;
+
+                    // Source 1: Plugin API
                     ApiClient.getJSON(ApiClient.getUrl('Recommendations/Libraries')).then(function (libraries) {
-                        select.innerHTML = '<option value="">-- Automatisch erkennen (oder auswählen) --</option>';
-                        libraries.forEach(function (lib) {
-                            const opt = document.createElement('option');
-                            opt.value = lib.id;
-                            opt.textContent = lib.name;
-                            if (lib.id.toLowerCase() === (selectedId || '').toLowerCase()) {
-                                opt.selected = true;
-                            }
-                            select.appendChild(opt);
-                        });
+                        if (libraries && libraries.length > 0) {
+                            populateSelect(select, libraries, selectedId);
+                        } else {
+                            fallbackToNativeLibraries(select, selectedId);
+                        }
                     }).catch(function (err) {
-                        console.error('Error loading libraries:', err);
+                        console.warn('[AnimeRecommendations] Custom library endpoint failed, trying native API:', err);
+                        fallbackToNativeLibraries(select, selectedId);
+                    });
+                }
+
+                function fallbackToNativeLibraries(select, selectedId) {
+                    // Source 2: Jellyfin native VirtualFolders
+                    const nativeUrl = ApiClient.getUrl('Library/VirtualFolders');
+                    ApiClient.getJSON(nativeUrl).then(function (virtualFolders) {
+                        const mapped = (virtualFolders || []).map(function (vf) {
+                            return {
+                                Id: vf.ItemId || vf.Id,
+                                Name: vf.Name
+                            };
+                        });
+                        populateSelect(select, mapped, selectedId);
+                    }).catch(function (err) {
+                        console.error('[AnimeRecommendations] Native library fetch also failed:', err);
+                        select.innerHTML = '<option value="">-- Fehler beim Laden (Standard wird genutzt) --</option>';
                     });
                 }
 
                 function loadConfig() {
-                    Dashboard.showLoadingMsg();
+                    if (window.Dashboard) {
+                        Dashboard.showLoadingMsg();
+                    }
+
                     ApiClient.getPluginConfiguration(pluginId).then(function (config) {
                         document.getElementById('inputSectionTitle').value = config.SectionTitle || 'Anime-Empfehlungen der Woche';
                         document.getElementById('inputGenres').value = (config.SelectedGenres || []).join(', ');
@@ -136,16 +176,25 @@
 
                         loadLibraries(config.SelectedLibraryId);
                         loadStatus();
-                        Dashboard.hideLoadingMsg();
+
+                        if (window.Dashboard) {
+                            Dashboard.hideLoadingMsg();
+                        }
                     }).catch(function (err) {
-                        Dashboard.hideLoadingMsg();
-                        console.error('Error loading plugin config:', err);
+                        if (window.Dashboard) {
+                            Dashboard.hideLoadingMsg();
+                        }
+                        console.error('[AnimeRecommendations] Error loading plugin config:', err);
+                        loadLibraries(null);
+                        loadStatus();
                     });
                 }
 
                 function saveConfig(e) {
                     e.preventDefault();
-                    Dashboard.showLoadingMsg();
+                    if (window.Dashboard) {
+                        Dashboard.showLoadingMsg();
+                    }
 
                     const genresRaw = document.getElementById('inputGenres').value;
                     const genres = genresRaw.split(',').map(s => s.trim()).filter(Boolean);
@@ -158,37 +207,66 @@
                         config.ExcludeWatched = document.getElementById('chkExcludeWatched').checked;
 
                         ApiClient.updatePluginConfiguration(pluginId, config).then(function () {
-                            Dashboard.hideLoadingMsg();
-                            Dashboard.alert('Einstellungen erfolgreich gespeichert!');
+                            if (window.Dashboard) {
+                                Dashboard.hideLoadingMsg();
+                                Dashboard.alert('Einstellungen erfolgreich gespeichert!');
+                            }
                             loadStatus();
                         }).catch(function (err) {
-                            Dashboard.hideLoadingMsg();
-                            Dashboard.alert('Fehler beim Speichern: ' + err);
+                            if (window.Dashboard) {
+                                Dashboard.hideLoadingMsg();
+                                Dashboard.alert('Fehler beim Speichern: ' + err);
+                            }
                         });
                     });
                 }
 
                 function triggerReroll() {
-                    Dashboard.showLoadingMsg();
+                    if (window.Dashboard) {
+                        Dashboard.showLoadingMsg();
+                    }
+
                     ApiClient.fetch({
                         url: ApiClient.getUrl('Recommendations/Reroll'),
                         type: 'POST'
                     }).then(function () {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert('Empfehlungen wurden erfolgreich neu ausgewürfelt!');
+                        if (window.Dashboard) {
+                            Dashboard.hideLoadingMsg();
+                            Dashboard.alert('Empfehlungen wurden erfolgreich neu ausgewürfelt!');
+                        }
                         loadStatus();
                     }).catch(function (err) {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert('Fehler beim Neuauswürfeln: ' + err);
+                        if (window.Dashboard) {
+                            Dashboard.hideLoadingMsg();
+                            Dashboard.alert('Fehler beim Neuauswürfeln: ' + err);
+                        }
                     });
                 }
 
-                document.querySelector('.animeRecommendationsConfigurationPage')
-                    .addEventListener('pageshow', function () {
-                        loadConfig();
-                        document.getElementById('animeRecommendationsForm').addEventListener('submit', saveConfig);
-                        document.getElementById('btnReroll').addEventListener('click', triggerReroll);
-                    });
+                function init() {
+                    loadConfig();
+
+                    const form = document.getElementById('animeRecommendationsForm');
+                    if (form && !form.dataset.bound) {
+                        form.dataset.bound = "true";
+                        form.addEventListener('submit', saveConfig);
+                    }
+
+                    const btnReroll = document.getElementById('btnReroll');
+                    if (btnReroll && !btnReroll.dataset.bound) {
+                        btnReroll.dataset.bound = "true";
+                        btnReroll.addEventListener('click', triggerReroll);
+                    }
+                }
+
+                const page = document.querySelector('.animeRecommendationsConfigurationPage');
+                if (page) {
+                    page.addEventListener('viewshow', init);
+                    page.addEventListener('pageshow', init);
+                }
+
+                // Always run immediately upon script load
+                setTimeout(init, 50);
             })();
         </script>
     </div>
