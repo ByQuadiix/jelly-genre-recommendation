@@ -60,7 +60,7 @@ public static class FileTransformationIntegration
 
             if (fileTransformationAssembly == null || pluginInterfaceType == null)
             {
-                logger?.LogInformation("[AnimeRecommendations] File Transformation plugin not yet available in current AppDomain/AssemblyLoadContext.");
+                logger?.LogDebug("[AnimeRecommendations] File Transformation plugin not yet available in current AppDomain/AssemblyLoadContext.");
                 return;
             }
 
@@ -109,7 +109,8 @@ public static class FileTransformationIntegration
 
     /// <summary>
     /// Universal callback method invoked by File Transformation.
-    /// Handles both string and object (JObject) payloads containing "contents".
+    /// Extracts the HTML contents from JObject, JsonObject, or string payloads,
+    /// injects the script tag, and returns the modified HTML.
     /// </summary>
     /// <param name="payload">Payload containing HTML string or JObject.</param>
     /// <returns>Transformed HTML string.</returns>
@@ -128,14 +129,58 @@ public static class FileTransformationIntegration
         }
         else
         {
-            var prop = payload.GetType().GetProperty("contents", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-            if (prop != null)
+            // Case 1: Newtonsoft JObject indexer: payload["contents"]
+            try
             {
-                html = prop.GetValue(payload)?.ToString();
+                var indexer = payload.GetType().GetProperty("Item", new[] { typeof(string) });
+                if (indexer != null)
+                {
+                    var token = indexer.GetValue(payload, new object[] { "contents" });
+                    if (token != null)
+                    {
+                        html = token.ToString();
+                    }
+                }
             }
-            else
+            catch { }
+
+            // Case 2: System.Text.Json parsing
+            if (string.IsNullOrEmpty(html))
             {
-                html = payload.ToString();
+                try
+                {
+                    var jsonStr = payload.ToString();
+                    if (!string.IsNullOrWhiteSpace(jsonStr) && jsonStr.TrimStart().StartsWith("{"))
+                    {
+                        using var doc = JsonDocument.Parse(jsonStr);
+                        if (doc.RootElement.TryGetProperty("contents", out var elem))
+                        {
+                            html = elem.GetString();
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            // Case 3: Property named "contents" or "Contents"
+            if (string.IsNullOrEmpty(html))
+            {
+                var prop = payload.GetType().GetProperty("contents", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase)
+                        ?? payload.GetType().GetProperty("Contents", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (prop != null)
+                {
+                    html = prop.GetValue(payload)?.ToString();
+                }
+            }
+
+            // Case 4: If still null, check if payload.ToString() itself is HTML
+            if (string.IsNullOrEmpty(html))
+            {
+                var str = payload.ToString();
+                if (str != null && (str.Contains("<html", StringComparison.OrdinalIgnoreCase) || str.Contains("<!DOCTYPE", StringComparison.OrdinalIgnoreCase)))
+                {
+                    html = str;
+                }
             }
         }
 

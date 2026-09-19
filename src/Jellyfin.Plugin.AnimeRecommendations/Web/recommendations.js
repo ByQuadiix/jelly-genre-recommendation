@@ -5,13 +5,12 @@
 (function () {
     'use strict';
 
-    console.log('[AnimeRecommendations] Initializing client script...');
+    console.log('[AnimeRecommendations] Client script loaded!');
 
     const SECTION_ID = 'anime-weekly-recommendations-section';
     let cachedData = null;
     let currentSelectedGenre = 'all';
     let isFetching = false;
-    let lastRenderedHash = '';
 
     // Inject custom CSS styling
     function injectStyles() {
@@ -179,14 +178,18 @@
         }
 
         const activePage = document.querySelector('.page:not(.hide)');
-        if (activePage && (activePage.id === 'indexPage' || activePage.classList.contains('homeTab'))) {
+        if (activePage && (activePage.id === 'indexPage' || activePage.classList.contains('homeTab') || activePage.getAttribute('data-type') === 'home')) {
+            return true;
+        }
+
+        if (document.querySelector('.homeSectionsContainer, #indexPage .sections')) {
             return true;
         }
 
         return false;
     }
 
-    // Fetch recommendations from plugin API
+    // Fetch recommendations from plugin API using native ApiClient
     async function fetchRecommendations() {
         if (isFetching) return cachedData;
         isFetching = true;
@@ -201,14 +204,17 @@
             const currentUserId = apiClient.getCurrentUserId ? apiClient.getCurrentUserId() : '';
             const url = apiClient.getUrl('Recommendations/Weekly', { userId: currentUserId });
 
-            const response = await fetch(url, {
-                headers: {
-                    'Authorization': apiClient.accessToken ? `MediaBrowser Token="${apiClient.accessToken()}"` : ''
-                }
-            });
+            console.log('[AnimeRecommendations] Requesting URL:', url);
 
+            if (apiClient.getJSON) {
+                const data = await apiClient.getJSON(url);
+                cachedData = data;
+                return data;
+            }
+
+            const response = await fetch(url);
             if (!response.ok) {
-                console.error('[AnimeRecommendations] API error:', response.status, response.statusText);
+                console.error('[AnimeRecommendations] API fetch error:', response.status, response.statusText);
                 return null;
             }
 
@@ -311,18 +317,18 @@
         const homeContainer = document.querySelector('.homeSectionsContainer, #indexPage .sections, .sections, #indexPage, .page:not(.hide) .content-primary, .homeTab, [data-role="page"]:not(.hide)');
 
         if (!resumableSection && !nextUpSection && !latestSection && !homeContainer) {
-            // Home DOM not yet loaded; will re-attempt on next tick
+            // Home DOM not yet ready
             return;
         }
 
-        console.log('[AnimeRecommendations] Home screen detected, fetching recommendations...');
+        console.log('[AnimeRecommendations] Home screen detected, loading data...');
         const data = await fetchRecommendations();
         if (!data || !data.items || data.items.length === 0) {
-            console.warn('[AnimeRecommendations] No recommendation items returned.');
+            console.warn('[AnimeRecommendations] No recommendation items available to display.');
             return;
         }
 
-        console.log('[AnimeRecommendations] Rendering recommendations:', data.items.length, 'items');
+        console.log('[AnimeRecommendations] Rendering', data.items.length, 'recommendation items...');
 
         let section = document.getElementById(SECTION_ID);
         if (!section) {
@@ -377,23 +383,24 @@
         // Initial card render
         const initialItems = getFilteredItems(data, currentSelectedGenre);
         renderCards(cardsContainer, initialItems);
+        console.log('[AnimeRecommendations] Section successfully rendered on home page!');
     }
 
     // Navigation and lifecycle hooks
     function setupHooks() {
         document.addEventListener('viewshow', () => {
-            setTimeout(renderSection, 150);
+            setTimeout(renderSection, 200);
         });
 
         window.addEventListener('hashchange', () => {
-            setTimeout(renderSection, 150);
+            setTimeout(renderSection, 200);
         });
 
         window.addEventListener('popstate', () => {
-            setTimeout(renderSection, 150);
+            setTimeout(renderSection, 200);
         });
 
-        // Fallback polling observer for dynamic SPA re-renders
+        // Periodic check to ensure row stays rendered when navigating or SPA dynamic refresh
         setInterval(() => {
             if (isHomePage()) {
                 const section = document.getElementById(SECTION_ID);
@@ -401,7 +408,7 @@
                     renderSection();
                 }
             }
-        }, 2000);
+        }, 1500);
     }
 
     // Initialize when DOM is ready

@@ -34,15 +34,6 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     {
         Instance = this;
         Logger = logger;
-
-        try
-        {
-            FileTransformationIntegration.TryRegister(logger);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Could not register File Transformation integration at startup.");
-        }
     }
 
     /// <summary>
