@@ -52,6 +52,7 @@ public class RecommendationsController : ControllerBase
             }
 
             var result = _recommendationService.GetWeeklyRecommendations(userId);
+            _logger.LogInformation("API /Recommendations/Weekly returning {Count} items for user {UserId}", result.Items.Count, userId);
             return Ok(result);
         }
         catch (Exception ex)

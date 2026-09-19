@@ -20,6 +20,8 @@ public class RecommendationService
     private readonly IUserDataManager _userDataManager;
     private readonly IUserManager _userManager;
     private readonly ILogger<RecommendationService> _logger;
+    private static readonly System.Threading.SemaphoreSlim _rotationLock = new(1, 1);
+    private static Dictionary<string, List<Guid>>? _memoryCache;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RecommendationService"/> class.
@@ -37,113 +39,126 @@ public class RecommendationService
     }
 
     /// <summary>
+    /// <summary>
     /// Checks and performs the weekly rotation if needed or forced.
     /// </summary>
     /// <param name="force">Whether to force rotation regardless of time.</param>
     /// <returns>True if rotated, false otherwise.</returns>
     public bool RotateRecommendations(bool force = false)
     {
-        var config = Plugin.Instance?.Configuration;
-        if (config == null)
+        _rotationLock.Wait();
+        try
         {
-            return false;
-        }
-
-        var now = DateTime.UtcNow;
-        var needsRotation = force ||
-                            config.LastRotationTime == DateTime.MinValue ||
-                            (now - config.LastRotationTime).TotalDays >= 7 ||
-                            config.StoredRecommendations == null ||
-                            config.StoredRecommendations.Count == 0;
-
-        if (!needsRotation)
-        {
-            _logger.LogDebug("Weekly recommendations are still valid. Skipping rotation.");
-            return false;
-        }
-
-        _logger.LogInformation("Generating fresh weekly anime recommendations...");
-
-        // Determine target library folder
-        BaseItem? targetFolder = null;
-        if (config.SelectedLibraryId != Guid.Empty)
-        {
-            targetFolder = _libraryManager.GetItemById(config.SelectedLibraryId);
-        }
-
-        // Fallback: Find library containing 'anime' or first video library
-        if (targetFolder == null)
-        {
-            var virtualFolders = _libraryManager.GetVirtualFolders();
-            var animeFolder = virtualFolders.FirstOrDefault(f => f.Name.Contains("anime", StringComparison.OrdinalIgnoreCase));
-            if (animeFolder != null && Guid.TryParse(animeFolder.ItemId, out var folderGuid))
+            var config = Plugin.Instance?.Configuration;
+            if (config == null)
             {
-                targetFolder = _libraryManager.GetItemById(folderGuid);
-                if (targetFolder != null)
+                _logger.LogWarning("Plugin configuration is null. Skipping rotation.");
+                return false;
+            }
+
+            var now = DateTime.UtcNow;
+            var needsRotation = force ||
+                                config.LastRotationTime == DateTime.MinValue ||
+                                (now - config.LastRotationTime).TotalDays >= 7 ||
+                                config.StoredRecommendations == null ||
+                                config.StoredRecommendations.Count == 0 ||
+                                _memoryCache == null ||
+                                _memoryCache.Count == 0;
+
+            if (!needsRotation)
+            {
+                _logger.LogDebug("Weekly recommendations are still valid. Skipping rotation.");
+                return false;
+            }
+
+            _logger.LogInformation("Generating fresh weekly anime recommendations...");
+
+            // Determine target library folder
+            BaseItem? targetFolder = null;
+            if (config.SelectedLibraryId != Guid.Empty)
+            {
+                targetFolder = _libraryManager.GetItemById(config.SelectedLibraryId);
+            }
+
+            // Fallback: Find library containing 'anime' or first video library
+            if (targetFolder == null)
+            {
+                var virtualFolders = _libraryManager.GetVirtualFolders();
+                var animeFolder = virtualFolders.FirstOrDefault(f => f.Name.Contains("anime", StringComparison.OrdinalIgnoreCase));
+                if (animeFolder != null && Guid.TryParse(animeFolder.ItemId, out var folderGuid))
                 {
-                    config.SelectedLibraryId = targetFolder.Id;
-                    config.SelectedLibraryName = targetFolder.Name;
+                    targetFolder = _libraryManager.GetItemById(folderGuid);
+                    if (targetFolder != null)
+                    {
+                        config.SelectedLibraryId = targetFolder.Id;
+                        config.SelectedLibraryName = targetFolder.Name;
+                    }
                 }
             }
-        }
 
-        // Query all series and movies in the library (or entire server if no library specified)
-        var query = new InternalItemsQuery
-        {
-            Recursive = true,
-            IncludeItemTypes = new[] { BaseItemKind.Series, BaseItemKind.Movie },
-            IsVirtualItem = false
-        };
-
-        if (targetFolder != null)
-        {
-            query.ParentId = targetFolder.Id;
-        }
-
-        var allItems = _libraryManager.GetItemList(query);
-        _logger.LogInformation("Found {Count} total items in target library for recommendations.", allItems.Count);
-
-        if (allItems.Count == 0)
-        {
-            _logger.LogWarning("No items found to generate recommendations from!");
-            return false;
-        }
-
-        var newRecommendations = new Dictionary<string, List<Guid>>(StringComparer.OrdinalIgnoreCase);
-        var genres = config.SelectedGenres != null && config.SelectedGenres.Count > 0
-            ? config.SelectedGenres
-            : new List<string> { "Action", "Abenteuer", "Comedy", "Romance", "Fantasy", "Sci-Fi" };
-
-        var itemsPerGenre = config.ItemsPerGenre > 0 ? config.ItemsPerGenre : 12;
-
-        foreach (var genre in genres)
-        {
-            var matchingItems = allItems
-                .Where(item => item.Genres != null && item.Genres.Any(g => g.Equals(genre, StringComparison.OrdinalIgnoreCase)))
-                .ToList();
-
-            if (matchingItems.Count == 0)
+            // Query all series and movies in the library (or entire server if no library specified)
+            var query = new InternalItemsQuery
             {
-                // Also check partial matching (e.g. "Adventure" / "Abenteuer")
-                matchingItems = allItems
-                    .Where(item => item.Genres != null && item.Genres.Any(g => g.Contains(genre, StringComparison.OrdinalIgnoreCase) || genre.Contains(g, StringComparison.OrdinalIgnoreCase)))
-                    .ToList();
+                Recursive = true,
+                IncludeItemTypes = new[] { BaseItemKind.Series, BaseItemKind.Movie },
+                IsVirtualItem = false
+            };
+
+            if (targetFolder != null)
+            {
+                query.ParentId = targetFolder.Id;
             }
 
-            // Shuffle randomly
-            var shuffled = matchingItems.OrderBy(_ => Random.Shared.Next()).ToList();
-            var selectedIds = shuffled.Take(itemsPerGenre).Select(i => i.Id).ToList();
+            var allItems = _libraryManager.GetItemList(query);
+            _logger.LogInformation("Found {Count} total items in target library for recommendations.", allItems.Count);
 
-            newRecommendations[genre] = selectedIds;
-            _logger.LogInformation("Selected {Count} recommendations for genre '{Genre}'.", selectedIds.Count, genre);
+            if (allItems.Count == 0)
+            {
+                _logger.LogWarning("No items found to generate recommendations from!");
+                return false;
+            }
+
+            var newRecommendations = new Dictionary<string, List<Guid>>(StringComparer.OrdinalIgnoreCase);
+            var genres = config.SelectedGenres != null && config.SelectedGenres.Count > 0
+                ? config.SelectedGenres
+                : new List<string> { "Action", "Abenteuer", "Comedy", "Romance", "Fantasy", "Sci-Fi" };
+
+            var itemsPerGenre = config.ItemsPerGenre > 0 ? config.ItemsPerGenre : 12;
+
+            foreach (var genre in genres)
+            {
+                var matchingItems = allItems
+                    .Where(item => item.Genres != null && item.Genres.Any(g => g.Equals(genre, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                if (matchingItems.Count == 0)
+                {
+                    // Also check partial matching (e.g. "Adventure" / "Abenteuer")
+                    matchingItems = allItems
+                        .Where(item => item.Genres != null && item.Genres.Any(g => g.Contains(genre, StringComparison.OrdinalIgnoreCase) || genre.Contains(g, StringComparison.OrdinalIgnoreCase)))
+                        .ToList();
+                }
+
+                // Shuffle randomly
+                var shuffled = matchingItems.OrderBy(_ => Random.Shared.Next()).ToList();
+                var selectedIds = shuffled.Take(itemsPerGenre).Select(i => i.Id).ToList();
+
+                newRecommendations[genre] = selectedIds;
+                _logger.LogInformation("Selected {Count} recommendations for genre '{Genre}'.", selectedIds.Count, genre);
+            }
+
+            _memoryCache = newRecommendations;
+            config.RecommendationsMap = newRecommendations;
+            config.LastRotationTime = now;
+            Plugin.Instance?.SaveConfiguration();
+
+            _logger.LogInformation("Weekly anime recommendations generated successfully with {Count} genres!", newRecommendations.Count);
+            return true;
         }
-
-        config.RecommendationsMap = newRecommendations;
-        config.LastRotationTime = now;
-        Plugin.Instance?.SaveConfiguration();
-
-        _logger.LogInformation("Weekly anime recommendations generated successfully!");
-        return true;
+        finally
+        {
+            _rotationLock.Release();
+        }
     }
 
     /// <summary>
@@ -155,10 +170,20 @@ public class RecommendationService
     {
         var config = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
 
-        // Ensure we have recommendations
-        if (config.StoredRecommendations == null || config.StoredRecommendations.Count == 0)
+        // Check if we need rotation
+        bool hasStored = (config.StoredRecommendations != null && config.StoredRecommendations.Count > 0) ||
+                         (_memoryCache != null && _memoryCache.Count > 0);
+
+        if (!hasStored)
         {
             RotateRecommendations(force: true);
+            config = Plugin.Instance?.Configuration ?? config;
+        }
+
+        // Sync memory cache with config if needed
+        if (_memoryCache == null || _memoryCache.Count == 0)
+        {
+            _memoryCache = config.RecommendationsMap;
         }
 
         User? user = null;
@@ -175,7 +200,17 @@ public class RecommendationService
         };
 
         var allItemIds = new HashSet<Guid>();
-        if (config.StoredRecommendations != null)
+        if (_memoryCache != null && _memoryCache.Count > 0)
+        {
+            foreach (var kvp in _memoryCache)
+            {
+                foreach (var id in kvp.Value)
+                {
+                    allItemIds.Add(id);
+                }
+            }
+        }
+        else if (config.StoredRecommendations != null)
         {
             foreach (var group in config.StoredRecommendations)
             {
@@ -189,13 +224,18 @@ public class RecommendationService
             }
         }
 
+        _logger.LogInformation("GetWeeklyRecommendations: processing {Count} unique item IDs for user {UserId} (ExcludeWatched={ExcludeWatched})",
+            allItemIds.Count, userId, config.ExcludeWatched);
+
         var itemsList = new List<RecommendationItemDto>();
+        var skippedWatched = new List<RecommendationItemDto>();
 
         foreach (var id in allItemIds)
         {
             var item = _libraryManager.GetItemById(id);
             if (item == null)
             {
+                _logger.LogWarning("GetWeeklyRecommendations: Item ID {Id} not found in library manager.", id);
                 continue;
             }
 
@@ -205,14 +245,8 @@ public class RecommendationService
                 var userData = _userDataManager.GetUserData(user, item);
                 if (userData != null)
                 {
-                    isPlayed = userData.Played;
+                    isPlayed = item.IsPlayed(user, userData) || userData.Played;
                 }
-            }
-
-            // Exclude watched if configured
-            if (config.ExcludeWatched && isPlayed)
-            {
-                continue;
             }
 
             string? primaryImageTag = null;
@@ -242,9 +276,25 @@ public class RecommendationService
                 Overview = item.Overview
             };
 
+            // Exclude watched if configured
+            if (config.ExcludeWatched && isPlayed)
+            {
+                skippedWatched.Add(dto);
+                continue;
+            }
+
             itemsList.Add(dto);
         }
 
+        // Fallback: If ExcludeWatched filtered out everything, include them anyway so row is never empty
+        if (itemsList.Count == 0 && skippedWatched.Count > 0)
+        {
+            _logger.LogWarning("All {Count} items were watched by user {UserId}. Falling back to showing watched items so recommendations row is not empty.",
+                skippedWatched.Count, userId);
+            itemsList.AddRange(skippedWatched);
+        }
+
+        _logger.LogInformation("GetWeeklyRecommendations completed. Returning {Count} items.", itemsList.Count);
         response.Items = itemsList;
         return response;
     }

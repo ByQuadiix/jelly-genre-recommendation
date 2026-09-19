@@ -190,43 +190,59 @@
     }
 
     // Fetch recommendations from plugin API using native ApiClient
+    let fetchPromise = null;
+
     async function fetchRecommendations() {
-        if (isFetching) return cachedData;
-        isFetching = true;
-
-        try {
-            const apiClient = window.ApiClient;
-            if (!apiClient) {
-                console.warn('[AnimeRecommendations] ApiClient not ready.');
-                return null;
-            }
-
-            const currentUserId = apiClient.getCurrentUserId ? apiClient.getCurrentUserId() : '';
-            const url = apiClient.getUrl('Recommendations/Weekly', { userId: currentUserId });
-
-            console.log('[AnimeRecommendations] Requesting URL:', url);
-
-            if (apiClient.getJSON) {
-                const data = await apiClient.getJSON(url);
-                cachedData = data;
-                return data;
-            }
-
-            const response = await fetch(url);
-            if (!response.ok) {
-                console.error('[AnimeRecommendations] API fetch error:', response.status, response.statusText);
-                return null;
-            }
-
-            const data = await response.json();
-            cachedData = data;
-            return data;
-        } catch (err) {
-            console.error('[AnimeRecommendations] Failed to fetch recommendations:', err);
-            return null;
-        } finally {
-            isFetching = false;
+        if (cachedData && cachedData.items && cachedData.items.length > 0) {
+            return cachedData;
         }
+
+        if (fetchPromise) {
+            return fetchPromise;
+        }
+
+        fetchPromise = (async () => {
+            try {
+                const apiClient = window.ApiClient;
+                if (!apiClient) {
+                    console.warn('[AnimeRecommendations] ApiClient not ready.');
+                    return null;
+                }
+
+                const currentUserId = apiClient.getCurrentUserId ? apiClient.getCurrentUserId() : '';
+                const url = apiClient.getUrl('Recommendations/Weekly', { userId: currentUserId });
+
+                console.log('[AnimeRecommendations] Requesting URL:', url);
+
+                let data = null;
+                if (apiClient.getJSON) {
+                    data = await apiClient.getJSON(url);
+                } else {
+                    const response = await fetch(url);
+                    if (response.ok) {
+                        data = await response.json();
+                    } else {
+                        console.error('[AnimeRecommendations] API fetch error:', response.status, response.statusText);
+                    }
+                }
+
+                if (data && data.items && data.items.length > 0) {
+                    console.log('[AnimeRecommendations] Received', data.items.length, 'recommendation items from API.');
+                    cachedData = data;
+                } else if (data) {
+                    console.warn('[AnimeRecommendations] API returned 0 recommendation items:', data);
+                }
+
+                return data;
+            } catch (err) {
+                console.error('[AnimeRecommendations] Failed to fetch recommendations:', err);
+                return null;
+            } finally {
+                fetchPromise = null;
+            }
+        })();
+
+        return fetchPromise;
     }
 
     // Filter cards according to the selected genre tab
@@ -274,7 +290,8 @@
 
             card.innerHTML = `
                 <div class="cardImageWrapper">
-                    <img class="cardImage" src="${imgUrl}" alt="${item.name}" loading="lazy" onerror="this.style.display='none';" />
+                    <img class="cardImage" src="${imgUrl}" alt="${item.name}" loading="lazy" onerror="this.onerror=null;this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
+                    <div class="cardImageFallback" style="display:none;width:100%;height:100%;align-items:center;justify-content:center;background:#202020;padding:10px;text-align:center;font-size:0.85em;box-sizing:border-box;">${item.name}</div>
                     ${playedDisplay}
                 </div>
                 <div class="cardDetails">
@@ -323,8 +340,12 @@
 
         console.log('[AnimeRecommendations] Home screen detected, loading data...');
         const data = await fetchRecommendations();
-        if (!data || !data.items || data.items.length === 0) {
-            console.warn('[AnimeRecommendations] No recommendation items available to display.');
+        if (!data) {
+            console.warn('[AnimeRecommendations] Recommendations data is null.');
+            return;
+        }
+        if (!data.items || data.items.length === 0) {
+            console.warn('[AnimeRecommendations] No recommendation items available in response:', data);
             return;
         }
 
@@ -335,7 +356,10 @@
             section = document.createElement('div');
             section.id = SECTION_ID;
             section.className = 'verticalSection anime-recommendations-container';
+        }
 
+        // Ensure section is in the DOM at the right location
+        if (!section.parentNode) {
             // Find best insertion spot: After Continue Watching, or Next Up, or before Latest
             if (resumableSection && resumableSection.parentNode) {
                 resumableSection.parentNode.insertBefore(section, resumableSection.nextSibling);
