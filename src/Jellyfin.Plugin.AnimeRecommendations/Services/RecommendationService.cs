@@ -138,7 +138,7 @@ public class RecommendationService
             _logger.LogInformation("Selected {Count} recommendations for genre '{Genre}'.", selectedIds.Count, genre);
         }
 
-        config.StoredRecommendations = newRecommendations;
+        config.RecommendationsMap = newRecommendations;
         config.LastRotationTime = now;
         Plugin.Instance?.SaveConfiguration();
 
@@ -177,11 +177,14 @@ public class RecommendationService
         var allItemIds = new HashSet<Guid>();
         if (config.StoredRecommendations != null)
         {
-            foreach (var pair in config.StoredRecommendations)
+            foreach (var group in config.StoredRecommendations)
             {
-                foreach (var id in pair.Value)
+                if (group.ItemIds != null)
                 {
-                    allItemIds.Add(id);
+                    foreach (var id in group.ItemIds)
+                    {
+                        allItemIds.Add(id);
+                    }
                 }
             }
         }

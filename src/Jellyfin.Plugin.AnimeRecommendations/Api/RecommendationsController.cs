@@ -196,7 +196,7 @@ public class RecommendationsController : ControllerBase
             itemsPerGenre = config?.ItemsPerGenre,
             excludeWatched = config?.ExcludeWatched,
             genres = config?.SelectedGenres,
-            totalCachedItems = config?.StoredRecommendations?.Values.Sum(l => l.Count) ?? 0
+            totalCachedItems = config?.StoredRecommendations?.Sum(g => g.ItemIds?.Count ?? 0) ?? 0
         });
     }
 }
