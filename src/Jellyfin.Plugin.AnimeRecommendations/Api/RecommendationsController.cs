@@ -46,6 +46,11 @@ public class RecommendationsController : ControllerBase
     {
         try
         {
+            if (!FileTransformationIntegration.IsFileTransformationActive)
+            {
+                FileTransformationIntegration.TryRegister(_logger);
+            }
+
             var result = _recommendationService.GetWeeklyRecommendations(userId);
             return Ok(result);
         }
@@ -186,6 +191,11 @@ public class RecommendationsController : ControllerBase
     [HttpGet("Status")]
     public ActionResult<object> GetStatus()
     {
+        if (!FileTransformationIntegration.IsFileTransformationActive)
+        {
+            FileTransformationIntegration.TryRegister(_logger);
+        }
+
         var config = Plugin.Instance?.Configuration;
         return Ok(new
         {

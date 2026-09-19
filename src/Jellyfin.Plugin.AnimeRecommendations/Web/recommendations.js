@@ -305,20 +305,24 @@
         injectStyles();
 
         // Check target insertion point on home page
-        const resumableSection = document.querySelector('#resumableSection, .resumableSection, #resumeSection');
-        const nextUpSection = document.querySelector('#nextUpSection, .nextUpSection');
-        const latestSection = document.querySelector('#latestSection, .latestSection');
-        const homeContainer = document.querySelector('.homeSectionsContainer, #indexPage .sections');
+        const resumableSection = document.querySelector('#resumableSection, .resumableSection, #resumeSection, [data-type="resume"], .section0');
+        const nextUpSection = document.querySelector('#nextUpSection, .nextUpSection, [data-type="nextup"], .section1');
+        const latestSection = document.querySelector('#latestSection, .latestSection, [data-type="latest"]');
+        const homeContainer = document.querySelector('.homeSectionsContainer, #indexPage .sections, .sections, #indexPage, .page:not(.hide) .content-primary, .homeTab, [data-role="page"]:not(.hide)');
 
         if (!resumableSection && !nextUpSection && !latestSection && !homeContainer) {
             // Home DOM not yet loaded; will re-attempt on next tick
             return;
         }
 
+        console.log('[AnimeRecommendations] Home screen detected, fetching recommendations...');
         const data = await fetchRecommendations();
         if (!data || !data.items || data.items.length === 0) {
+            console.warn('[AnimeRecommendations] No recommendation items returned.');
             return;
         }
+
+        console.log('[AnimeRecommendations] Rendering recommendations:', data.items.length, 'items');
 
         let section = document.getElementById(SECTION_ID);
         if (!section) {

@@ -69,6 +69,9 @@ public class WeeklyRecommendationTask : IScheduledTask
 
         try
         {
+            // Ensure FileTransformation registration is verified
+            FileTransformationIntegration.TryRegister(_logger);
+
             // If triggered on startup, only rotate if expired; if executed manually or scheduled, rotate
             _recommendationService.RotateRecommendations(force: false);
             progress?.Report(100);

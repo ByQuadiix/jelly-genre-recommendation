@@ -28,53 +28,67 @@ public static class FileTransformationIntegration
     /// <param name="logger">Optional logger.</param>
     public static void TryRegister(ILogger? logger = null)
     {
+        if (IsFileTransformationActive)
+        {
+            return;
+        }
+
         try
         {
             var assemblies = AssemblyLoadContext.All
                 .SelectMany(ctx => ctx.Assemblies)
-                .Where(a => a.FullName?.Contains(".FileTransformation", StringComparison.OrdinalIgnoreCase) ?? false)
+                .Concat(AppDomain.CurrentDomain.GetAssemblies())
+                .Distinct()
+                .Where(a => a.FullName?.Contains("FileTransformation", StringComparison.OrdinalIgnoreCase) ?? false)
                 .ToList();
 
-            var fileTransformationAssembly = assemblies.FirstOrDefault();
-            if (fileTransformationAssembly == null)
+            Assembly? fileTransformationAssembly = null;
+            Type? pluginInterfaceType = null;
+
+            foreach (var asm in assemblies)
             {
-                logger?.LogInformation("File Transformation plugin not detected. Client script can be included via Custom JS or File Transformation WebUI.");
+                pluginInterfaceType = asm.GetType("Jellyfin.Plugin.FileTransformation.PluginInterface")
+                                   ?? asm.GetType("Jellyfin.Plugin.FileTransformation.FileTransformationPlugin")
+                                   ?? asm.GetTypes().FirstOrDefault(t => t.Name == "PluginInterface" || t.Name == "FileTransformationPlugin");
+
+                if (pluginInterfaceType != null)
+                {
+                    fileTransformationAssembly = asm;
+                    break;
+                }
+            }
+
+            if (fileTransformationAssembly == null || pluginInterfaceType == null)
+            {
+                logger?.LogInformation("[AnimeRecommendations] File Transformation plugin not yet available in current AppDomain/AssemblyLoadContext.");
                 return;
             }
 
-            var pluginInterfaceType = fileTransformationAssembly.GetType("Jellyfin.Plugin.FileTransformation.PluginInterface");
-            if (pluginInterfaceType == null)
-            {
-                logger?.LogWarning("Found File Transformation assembly, but PluginInterface type was not found.");
-                return;
-            }
-
-            var registerMethod = pluginInterfaceType.GetMethod("RegisterTransformation", BindingFlags.Public | BindingFlags.Static);
+            var registerMethod = pluginInterfaceType.GetMethod("RegisterTransformation", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
             if (registerMethod == null)
             {
-                logger?.LogWarning("RegisterTransformation method not found on PluginInterface.");
+                logger?.LogWarning("[AnimeRecommendations] RegisterTransformation method not found on {TypeName}.", pluginInterfaceType.FullName);
                 return;
             }
 
-            // Create payload object
+            // Create payload with literal "index.html" as expected by File Transformation 3.0+
             var payloadNode = new JsonObject
             {
                 ["id"] = TransformationId.ToString(),
-                ["fileNamePattern"] = "index\\.html",
+                ["fileNamePattern"] = "index.html",
                 ["callbackAssembly"] = typeof(FileTransformationIntegration).Assembly.FullName,
                 ["callbackClass"] = typeof(FileTransformationIntegration).FullName,
-                ["callbackMethod"] = nameof(TransformIndexHtml)
+                ["callbackMethod"] = nameof(Transform)
             };
 
-            // If the method expects Newtonsoft JObject, convert or pass accordingly
             var paramType = registerMethod.GetParameters().FirstOrDefault()?.ParameterType;
             object payloadObj;
 
             if (paramType != null && paramType.FullName?.Contains("Newtonsoft", StringComparison.OrdinalIgnoreCase) == true)
             {
-                // Deserialize using Newtonsoft via reflection or JSON string
                 var jsonStr = payloadNode.ToJsonString();
-                var jObjectType = paramType.Assembly.GetType("Newtonsoft.Json.Linq.JObject");
+                var jObjectType = paramType.Assembly.GetType("Newtonsoft.Json.Linq.JObject")
+                               ?? Type.GetType("Newtonsoft.Json.Linq.JObject, Newtonsoft.Json");
                 var parseMethod = jObjectType?.GetMethod("Parse", new[] { typeof(string) });
                 payloadObj = parseMethod?.Invoke(null, new object[] { jsonStr }) ?? payloadNode;
             }
@@ -85,16 +99,50 @@ public static class FileTransformationIntegration
 
             registerMethod.Invoke(null, new[] { payloadObj });
             IsFileTransformationActive = true;
-            logger?.LogInformation("Successfully registered HTML transformation with File Transformation plugin!");
+            logger?.LogInformation("[AnimeRecommendations] Successfully registered HTML transformation with File Transformation plugin for 'index.html'!");
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Failed to register with File Transformation plugin. Fallback to direct script serving.");
+            logger?.LogWarning(ex, "[AnimeRecommendations] Failed to register with File Transformation plugin. Fallback to direct script serving.");
         }
     }
 
     /// <summary>
-    /// Callback invoked by the File Transformation plugin when index.html is served.
+    /// Universal callback method invoked by File Transformation.
+    /// Handles both string and object (JObject) payloads containing "contents".
+    /// </summary>
+    /// <param name="payload">Payload containing HTML string or JObject.</param>
+    /// <returns>Transformed HTML string.</returns>
+    public static string Transform(object? payload)
+    {
+        if (payload == null)
+        {
+            return string.Empty;
+        }
+
+        string? html = null;
+
+        if (payload is string s)
+        {
+            html = s;
+        }
+        else
+        {
+            var prop = payload.GetType().GetProperty("contents", BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+            if (prop != null)
+            {
+                html = prop.GetValue(payload)?.ToString();
+            }
+            else
+            {
+                html = payload.ToString();
+            }
+        }
+
+        return TransformIndexHtml(html ?? string.Empty);
+    }
+
+    /// <summary>
     /// Injects the client-side script tag into index.html.
     /// </summary>
     /// <param name="html">The original or partially transformed index.html content.</param>
