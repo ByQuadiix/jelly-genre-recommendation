@@ -226,8 +226,9 @@
                     }
                 }
 
-                if (data && data.items && data.items.length > 0) {
-                    console.log('[AnimeRecommendations] Received', data.items.length, 'recommendation items from API.');
+                const receivedItems = data ? (data.items || data.Items || []) : [];
+                if (data && receivedItems.length > 0) {
+                    console.log('[AnimeRecommendations] Received', receivedItems.length, 'recommendation items from API.');
                     cachedData = data;
                 } else if (data) {
                     console.warn('[AnimeRecommendations] API returned 0 recommendation items:', data);
@@ -247,12 +248,14 @@
 
     // Filter cards according to the selected genre tab
     function getFilteredItems(data, genre) {
-        if (!data || !data.items) return [];
-        if (genre === 'all') return data.items;
+        const items = data ? (data.items || data.Items || []) : [];
+        if (!items || items.length === 0) return [];
+        if (!genre || genre === 'all') return items;
 
-        return data.items.filter(item => {
-            if (!item.genres) return false;
-            return item.genres.some(g => g.trim().toLowerCase() === genre.trim().toLowerCase());
+        return items.filter(item => {
+            const itemGenres = item.genres || item.Genres;
+            if (!itemGenres || !Array.isArray(itemGenres)) return false;
+            return itemGenres.some(g => g && g.trim().toLowerCase() === genre.trim().toLowerCase());
         });
     }
 
@@ -268,34 +271,47 @@
         const apiClient = window.ApiClient;
 
         items.forEach(item => {
+            const itemId = item.id || item.Id;
+            const itemName = item.name || item.Name || '';
+            const itemRating = (item.communityRating !== undefined && item.communityRating !== null)
+                ? item.communityRating
+                : item.CommunityRating;
+            const itemYear = (item.productionYear !== undefined && item.productionYear !== null)
+                ? item.productionYear
+                : item.ProductionYear;
+            const itemPlayed = (item.played !== undefined && item.played !== null)
+                ? item.played
+                : (item.Played || false);
+            const itemImageTag = item.primaryImageTag || item.PrimaryImageTag;
+
             const card = document.createElement('div');
             card.className = 'recommendationCard';
-            card.setAttribute('data-id', item.id);
+            card.setAttribute('data-id', itemId);
 
             let imgUrl = '';
             if (apiClient) {
-                imgUrl = apiClient.getUrl(`Items/${item.id}/Images/Primary`, {
+                imgUrl = apiClient.getUrl(`Items/${itemId}/Images/Primary`, {
                     fillWidth: 320,
                     fillHeight: 480,
                     quality: 94,
-                    tag: item.primaryImageTag || undefined
+                    tag: itemImageTag || undefined
                 });
             }
 
-            const ratingDisplay = item.communityRating
-                ? `<span class="ratingBadge">★ ${item.communityRating.toFixed(1)}</span>`
+            const ratingDisplay = (itemRating !== undefined && itemRating !== null)
+                ? `<span class="ratingBadge">★ ${Number(itemRating).toFixed(1)}</span>`
                 : '';
-            const yearDisplay = item.productionYear ? `<span>${item.productionYear}</span>` : '';
-            const playedDisplay = item.played ? `<div class="playedBadge">✓</div>` : '';
+            const yearDisplay = itemYear ? `<span>${itemYear}</span>` : '';
+            const playedDisplay = itemPlayed ? `<div class="playedBadge">✓</div>` : '';
 
             card.innerHTML = `
                 <div class="cardImageWrapper">
-                    <img class="cardImage" src="${imgUrl}" alt="${item.name}" loading="lazy" onerror="this.onerror=null;this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
-                    <div class="cardImageFallback" style="display:none;width:100%;height:100%;align-items:center;justify-content:center;background:#202020;padding:10px;text-align:center;font-size:0.85em;box-sizing:border-box;">${item.name}</div>
+                    <img class="cardImage" src="${imgUrl}" alt="${itemName}" loading="lazy" onerror="this.onerror=null;this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />
+                    <div class="cardImageFallback" style="display:none;width:100%;height:100%;align-items:center;justify-content:center;background:#202020;padding:10px;text-align:center;font-size:0.85em;box-sizing:border-box;">${itemName}</div>
                     ${playedDisplay}
                 </div>
                 <div class="cardDetails">
-                    <div class="cardTitle" title="${item.name}">${item.name}</div>
+                    <div class="cardTitle" title="${itemName}">${itemName}</div>
                     <div class="cardMeta">
                         ${ratingDisplay}
                         ${yearDisplay}
@@ -307,9 +323,9 @@
             card.addEventListener('click', (e) => {
                 e.preventDefault();
                 if (window.appRouter && window.appRouter.showItem) {
-                    window.appRouter.showItem(item.id);
+                    window.appRouter.showItem(itemId);
                 } else {
-                    window.location.hash = `#!/details?id=${item.id}`;
+                    window.location.hash = `#!/details?id=${itemId}`;
                 }
             });
 
@@ -344,12 +360,17 @@
             console.warn('[AnimeRecommendations] Recommendations data is null.');
             return;
         }
-        if (!data.items || data.items.length === 0) {
+
+        const items = data.items || data.Items || [];
+        const genres = data.genres || data.Genres || [];
+        const title = data.title || data.Title || 'Anime-Empfehlungen der Woche';
+
+        if (items.length === 0) {
             console.warn('[AnimeRecommendations] No recommendation items available in response:', data);
             return;
         }
 
-        console.log('[AnimeRecommendations] Rendering', data.items.length, 'recommendation items...');
+        console.log('[AnimeRecommendations] Rendering', items.length, 'recommendation items...');
 
         let section = document.getElementById(SECTION_ID);
         if (!section) {
@@ -377,11 +398,11 @@
             <div class="sectionHeaderRow">
                 <h2 class="sectionTitle">
                     <span>✨</span>
-                    <span>${data.title || 'Anime-Empfehlungen der Woche'}</span>
+                    <span>${title}</span>
                 </h2>
                 <div class="genreTabsWrapper" id="${SECTION_ID}-tabs">
                     <button class="genreTabBtn ${currentSelectedGenre === 'all' ? 'active' : ''}" data-genre="all">Alle</button>
-                    ${(data.genres || []).map(genre => `
+                    ${genres.map(genre => `
                         <button class="genreTabBtn ${currentSelectedGenre === genre ? 'active' : ''}" data-genre="${genre}">${genre}</button>
                     `).join('')}
                 </div>

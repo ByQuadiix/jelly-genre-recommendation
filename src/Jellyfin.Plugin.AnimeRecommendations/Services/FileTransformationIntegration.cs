@@ -15,7 +15,12 @@ namespace Jellyfin.Plugin.AnimeRecommendations.Services;
 public static class FileTransformationIntegration
 {
     private static readonly Guid TransformationId = Guid.Parse("e8b15d23-74a9-4cf3-a612-98e364177b91");
-    private const string ScriptTag = "<script src=\"/Recommendations/ClientScript.js\" defer></script>";
+
+    private static string GetScriptTag()
+    {
+        var version = typeof(FileTransformationIntegration).Assembly.GetName().Version?.ToString() ?? "1.0.0.0";
+        return $"<script src=\"/Recommendations/ClientScript.js?v={version}\" defer></script>";
+    }
 
     /// <summary>
     /// Gets a value indicating whether the transformation has been registered with File Transformation.
@@ -199,16 +204,22 @@ public static class FileTransformationIntegration
             return html;
         }
 
+        var scriptTag = GetScriptTag();
+
         if (html.Contains("/Recommendations/ClientScript.js", StringComparison.OrdinalIgnoreCase))
         {
-            return html;
+            return System.Text.RegularExpressions.Regex.Replace(
+                html,
+                @"<script\s+src=""/Recommendations/ClientScript\.js(?:\?[^""]*)?""\s*defer></script>",
+                scriptTag,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 
         if (html.Contains("</body>", StringComparison.OrdinalIgnoreCase))
         {
-            return html.Replace("</body>", $"{ScriptTag}\n</body>", StringComparison.OrdinalIgnoreCase);
+            return html.Replace("</body>", $"{scriptTag}\n</body>", StringComparison.OrdinalIgnoreCase);
         }
 
-        return html + ScriptTag;
+        return html + scriptTag;
     }
 }

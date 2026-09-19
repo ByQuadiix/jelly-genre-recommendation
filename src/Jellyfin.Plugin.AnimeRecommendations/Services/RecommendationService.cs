@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Serialization;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Dto;
@@ -308,21 +309,25 @@ public class WeeklyRecommendationsResponse
     /// <summary>
     /// Gets or sets the title of the section.
     /// </summary>
+    [JsonPropertyName("title")]
     public string Title { get; set; } = "Anime-Empfehlungen der Woche";
 
     /// <summary>
     /// Gets or sets the list of active genres.
     /// </summary>
+    [JsonPropertyName("genres")]
     public List<string> Genres { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the list of recommendation items.
     /// </summary>
+    [JsonPropertyName("items")]
     public List<RecommendationItemDto> Items { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the timestamp when recommendations were last rotated.
     /// </summary>
+    [JsonPropertyName("lastRotationTime")]
     public DateTime LastRotationTime { get; set; }
 }
 
@@ -334,45 +339,54 @@ public class RecommendationItemDto
     /// <summary>
     /// Gets or sets the item ID.
     /// </summary>
+    [JsonPropertyName("id")]
     public Guid Id { get; set; }
 
     /// <summary>
     /// Gets or sets the item name.
     /// </summary>
+    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
     /// Gets or sets the production year.
     /// </summary>
+    [JsonPropertyName("productionYear")]
     public int? ProductionYear { get; set; }
 
     /// <summary>
     /// Gets or sets the community rating.
     /// </summary>
+    [JsonPropertyName("communityRating")]
     public float? CommunityRating { get; set; }
 
     /// <summary>
     /// Gets or sets the genres.
     /// </summary>
+    [JsonPropertyName("genres")]
     public List<string> Genres { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the primary image tag.
     /// </summary>
+    [JsonPropertyName("primaryImageTag")]
     public string? PrimaryImageTag { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether this item has been played by the requesting user.
     /// </summary>
+    [JsonPropertyName("played")]
     public bool Played { get; set; }
 
     /// <summary>
     /// Gets or sets the item type (Series, Movie, etc.).
     /// </summary>
+    [JsonPropertyName("type")]
     public string Type { get; set; } = "Series";
 
     /// <summary>
     /// Gets or sets the overview text.
     /// </summary>
+    [JsonPropertyName("overview")]
     public string? Overview { get; set; }
 }
