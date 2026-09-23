@@ -76,11 +76,11 @@ public static class FileTransformationIntegration
                 return;
             }
 
-            // Create payload with literal "index.html" as expected by File Transformation 3.0+
+            // Create payload targeting only index.html (escaped dot and boundary to avoid matching chunk.js files)
             var payloadNode = new JsonObject
             {
                 ["id"] = TransformationId.ToString(),
-                ["fileNamePattern"] = "index.html",
+                ["fileNamePattern"] = @"(?:^|[/\\])index\.html$",
                 ["callbackAssembly"] = typeof(FileTransformationIntegration).Assembly.FullName,
                 ["callbackClass"] = typeof(FileTransformationIntegration).FullName,
                 ["callbackMethod"] = nameof(Transform)
@@ -204,6 +204,13 @@ public static class FileTransformationIntegration
             return html;
         }
 
+        // Strict guard: ONLY transform valid HTML files containing </body>.
+        // Never append HTML tags to JavaScript (.js), CSS (.css), or other non-HTML files!
+        if (!html.Contains("</body>", StringComparison.OrdinalIgnoreCase))
+        {
+            return html;
+        }
+
         var scriptTag = GetScriptTag();
 
         if (html.Contains("/Recommendations/ClientScript.js", StringComparison.OrdinalIgnoreCase))
@@ -215,11 +222,6 @@ public static class FileTransformationIntegration
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         }
 
-        if (html.Contains("</body>", StringComparison.OrdinalIgnoreCase))
-        {
-            return html.Replace("</body>", $"{scriptTag}\n</body>", StringComparison.OrdinalIgnoreCase);
-        }
-
-        return html + scriptTag;
+        return html.Replace("</body>", $"{scriptTag}\n</body>", StringComparison.OrdinalIgnoreCase);
     }
 }
