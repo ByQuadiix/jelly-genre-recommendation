@@ -76,11 +76,13 @@ public static class FileTransformationIntegration
                 return;
             }
 
-            // Create payload targeting only index.html (escaped dot and boundary to avoid matching chunk.js files)
+            // Register under the literal "index.html" key. File Transformation runs only one pipeline per
+            // request (exact key first), so a regex key would be skipped when other plugins register
+            // "index.html". chunk.js files are protected by the </body> guard in TransformIndexHtml.
             var payloadNode = new JsonObject
             {
                 ["id"] = TransformationId.ToString(),
-                ["fileNamePattern"] = @"(?:^|[/\\])index\.html$",
+                ["fileNamePattern"] = "index.html",
                 ["callbackAssembly"] = typeof(FileTransformationIntegration).Assembly.FullName,
                 ["callbackClass"] = typeof(FileTransformationIntegration).FullName,
                 ["callbackMethod"] = nameof(Transform)
