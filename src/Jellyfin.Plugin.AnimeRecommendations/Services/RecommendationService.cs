@@ -22,7 +22,8 @@ public class RecommendationService
     private readonly IUserManager _userManager;
     private readonly ILogger<RecommendationService> _logger;
     private static readonly System.Threading.SemaphoreSlim _rotationLock = new(1, 1);
-    private static Dictionary<string, List<Guid>>? _memoryCache;
+    private static readonly TimeSpan _emptyRerollCooldown = TimeSpan.FromMinutes(10);
+    private static DateTime _lastEmptyReroll = DateTime.MinValue;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RecommendationService"/> class.
@@ -40,6 +41,25 @@ public class RecommendationService
     }
 
     /// <summary>
+    /// Gets the start of the current rotation week in UTC: the most recent configured
+    /// rotation day at 03:00 server local time (same time the scheduled task runs).
+    /// </summary>
+    /// <param name="rotationDay">Configured rotation weekday.</param>
+    /// <param name="utcNow">Current UTC time.</param>
+    /// <returns>Start of the current rotation period in UTC.</returns>
+    internal static DateTime GetCurrentRotationStartUtc(DayOfWeek rotationDay, DateTime utcNow)
+    {
+        var localNow = utcNow.ToLocalTime();
+        var daysBack = ((int)localNow.DayOfWeek - (int)rotationDay + 7) % 7;
+        var start = localNow.Date.AddDays(-daysBack).AddHours(3);
+        if (start > localNow)
+        {
+            start = start.AddDays(-7);
+        }
+
+        return DateTime.SpecifyKind(start, DateTimeKind.Local).ToUniversalTime();
+    }
+
     /// <summary>
     /// Checks and performs the weekly rotation if needed or forced.
     /// </summary>
@@ -57,18 +77,24 @@ public class RecommendationService
                 return false;
             }
 
+            // Only the persisted configuration decides whether a rotation is due. An in-memory
+            // cache is empty after every server restart and must not trigger a new roll.
             var now = DateTime.UtcNow;
+            var lastRotationUtc = config.LastRotationTime.Kind == DateTimeKind.Local
+                ? config.LastRotationTime.ToUniversalTime()
+                : DateTime.SpecifyKind(config.LastRotationTime, DateTimeKind.Utc);
+            var rotationStart = GetCurrentRotationStartUtc(config.RotationDay, now);
             var needsRotation = force ||
                                 config.LastRotationTime == DateTime.MinValue ||
-                                (now - config.LastRotationTime).TotalDays >= 7 ||
+                                lastRotationUtc < rotationStart ||
                                 config.StoredRecommendations == null ||
-                                config.StoredRecommendations.Count == 0 ||
-                                _memoryCache == null ||
-                                _memoryCache.Count == 0;
+                                config.StoredRecommendations.Count == 0;
 
             if (!needsRotation)
             {
-                _logger.LogDebug("Weekly recommendations are still valid. Skipping rotation.");
+                _logger.LogInformation(
+                    "Weekly recommendations from {LastRotation:u} are still valid until the next rotation. Skipping rotation.",
+                    lastRotationUtc);
                 return false;
             }
 
@@ -148,7 +174,6 @@ public class RecommendationService
                 _logger.LogInformation("Selected {Count} recommendations for genre '{Genre}'.", selectedIds.Count, genre);
             }
 
-            _memoryCache = newRecommendations;
             config.RecommendationsMap = newRecommendations;
             config.LastRotationTime = now;
             Plugin.Instance?.SaveConfiguration();
@@ -171,20 +196,11 @@ public class RecommendationService
     {
         var config = Plugin.Instance?.Configuration ?? new Configuration.PluginConfiguration();
 
-        // Check if we need rotation
-        bool hasStored = (config.StoredRecommendations != null && config.StoredRecommendations.Count > 0) ||
-                         (_memoryCache != null && _memoryCache.Count > 0);
-
-        if (!hasStored)
+        // Generate an initial set if nothing has been stored yet
+        if (config.StoredRecommendations == null || config.StoredRecommendations.Count == 0)
         {
             RotateRecommendations(force: true);
             config = Plugin.Instance?.Configuration ?? config;
-        }
-
-        // Sync memory cache with config if needed
-        if (_memoryCache == null || _memoryCache.Count == 0)
-        {
-            _memoryCache = config.RecommendationsMap;
         }
 
         User? user = null;
@@ -200,29 +216,22 @@ public class RecommendationService
             Genres = config.SelectedGenres?.ToList() ?? new List<string>()
         };
 
-        var allItemIds = new HashSet<Guid>();
-        if (_memoryCache != null && _memoryCache.Count > 0)
+        var allItemIds = CollectStoredIds(config);
+        var resolvedItems = ResolveItems(allItemIds);
+
+        // If all stored titles were deleted from the library, the row would stay empty
+        // for the rest of the week. Roll a new set instead (throttled to avoid loops).
+        if (resolvedItems.Count == 0 && allItemIds.Count > 0 && DateTime.UtcNow - _lastEmptyReroll > _emptyRerollCooldown)
         {
-            foreach (var kvp in _memoryCache)
-            {
-                foreach (var id in kvp.Value)
-                {
-                    allItemIds.Add(id);
-                }
-            }
-        }
-        else if (config.StoredRecommendations != null)
-        {
-            foreach (var group in config.StoredRecommendations)
-            {
-                if (group.ItemIds != null)
-                {
-                    foreach (var id in group.ItemIds)
-                    {
-                        allItemIds.Add(id);
-                    }
-                }
-            }
+            _lastEmptyReroll = DateTime.UtcNow;
+            _logger.LogWarning(
+                "None of the {Count} stored recommendations exist in the library anymore. Re-rolling recommendations.",
+                allItemIds.Count);
+            RotateRecommendations(force: true);
+            config = Plugin.Instance?.Configuration ?? config;
+            allItemIds = CollectStoredIds(config);
+            resolvedItems = ResolveItems(allItemIds);
+            response.LastRotationTime = config.LastRotationTime;
         }
 
         _logger.LogInformation("GetWeeklyRecommendations: processing {Count} unique item IDs for user {UserId} (ExcludeWatched={ExcludeWatched})",
@@ -231,15 +240,8 @@ public class RecommendationService
         var itemsList = new List<RecommendationItemDto>();
         var skippedWatched = new List<RecommendationItemDto>();
 
-        foreach (var id in allItemIds)
+        foreach (var item in resolvedItems)
         {
-            var item = _libraryManager.GetItemById(id);
-            if (item == null)
-            {
-                _logger.LogWarning("GetWeeklyRecommendations: Item ID {Id} not found in library manager.", id);
-                continue;
-            }
-
             bool isPlayed = false;
             if (user != null)
             {
@@ -298,6 +300,41 @@ public class RecommendationService
         _logger.LogInformation("GetWeeklyRecommendations completed. Returning {Count} items.", itemsList.Count);
         response.Items = itemsList;
         return response;
+    }
+
+    private static HashSet<Guid> CollectStoredIds(Configuration.PluginConfiguration config)
+    {
+        var ids = new HashSet<Guid>();
+        if (config.StoredRecommendations != null)
+        {
+            foreach (var group in config.StoredRecommendations)
+            {
+                if (group.ItemIds != null)
+                {
+                    ids.UnionWith(group.ItemIds);
+                }
+            }
+        }
+
+        return ids;
+    }
+
+    private List<BaseItem> ResolveItems(IEnumerable<Guid> ids)
+    {
+        var items = new List<BaseItem>();
+        foreach (var id in ids)
+        {
+            var item = _libraryManager.GetItemById(id);
+            if (item == null)
+            {
+                _logger.LogWarning("GetWeeklyRecommendations: Item ID {Id} not found in library manager.", id);
+                continue;
+            }
+
+            items.Add(item);
+        }
+
+        return items;
     }
 }
 
